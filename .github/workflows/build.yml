@@ -38,7 +38,7 @@ jobs:
           yarn_mappings=1.21.11+build.1
           loader_version=0.18.2
           fabric_version=0.141.3+1.21.11
-          loom_version=1.13
+          loom_version=1.10.5
           GRADLEPROPS
 
           cat > settings.gradle <<'SETTINGSGRADLE'
