@@ -28,7 +28,6 @@ jobs:
           mkdir -p src/main/java/com/example/educlient/setting
           mkdir -p src/main/java/com/example/educlient/gui
           mkdir -p src/main/java/com/example/educlient/util
-          mkdir -p src/main/java/com/example/educlient/mixin
           mkdir -p src/main/resources
 
           cat > gradle.properties <<'GRADLEPROPS'
@@ -88,7 +87,6 @@ jobs:
             "entrypoints": {
               "client": ["com.example.educlient.EduClient"]
             },
-            "mixins": ["educlient.mixins.json"],
             "depends": {
               "fabricloader": ">=0.17.0",
               "minecraft": "~1.21.11",
@@ -97,17 +95,6 @@ jobs:
             }
           }
           FABRICMOD
-
-          cat > src/main/resources/educlient.mixins.json <<'MIXINSJSON'
-          {
-            "required": true,
-            "minVersion": "0.8",
-            "package": "com.example.educlient.mixin",
-            "compatibilityLevel": "JAVA_21",
-            "client": ["KeyboardMixin"],
-            "injectors": { "defaultRequire": 1 }
-          }
-          MIXINSJSON
 
           cat > src/main/java/com/example/educlient/EduClient.java <<'JAVA'
           package com.example.educlient;
@@ -135,6 +122,8 @@ jobs:
           import com.example.educlient.module.movement.PlaceholderMovementModule;
           import com.example.educlient.module.player.PlaceholderPlayerModule;
           import com.example.educlient.module.render.PlaceholderRenderModule;
+          import com.example.educlient.setting.KeybindSetting;
+          import com.example.educlient.setting.Setting;
           import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
           import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
           import net.minecraft.client.option.KeyBinding;
@@ -168,10 +157,24 @@ jobs:
                       while (clickGuiKey.wasPressed()) {
                           client.setScreen(new com.example.educlient.gui.ClickGuiScreen());
                       }
+
+                      long handle = client.getWindow().getHandle();
                       for (Module module : modules) {
                           if (module.isEnabled()) module.onTick();
+                          pollKeybind(module, handle);
                       }
                   });
+              }
+
+              private void pollKeybind(Module module, long windowHandle) {
+                  int key = -1;
+                  for (Setting<?> s : module.settings) {
+                      if (s instanceof KeybindSetting ks) { key = ks.getValue(); break; }
+                  }
+                  if (key == -1) { module.wasPressed = false; return; }
+                  boolean pressed = InputUtil.isKeyPressed(windowHandle, key);
+                  if (pressed && !module.wasPressed) module.toggle();
+                  module.wasPressed = pressed;
               }
 
               public <T extends Module> T getModule(Class<T> clazz) {
@@ -186,6 +189,7 @@ jobs:
           cat > src/main/java/com/example/educlient/module/Module.java <<'JAVA'
           package com.example.educlient.module;
 
+          import com.example.educlient.setting.KeybindSetting;
           import com.example.educlient.setting.Setting;
           import net.minecraft.client.MinecraftClient;
 
@@ -197,12 +201,15 @@ jobs:
               private final String name;
               private final Category category;
               private boolean enabled;
-              private int key = -1;
+              public boolean wasPressed = false;
+              public final KeybindSetting keybind;
               public final List<Setting<?>> settings = new ArrayList<>();
 
               public Module(String name, Category category) {
                   this.name = name;
                   this.category = category;
+                  this.keybind = new KeybindSetting("Keybind", -1);
+                  settings.add(keybind);
               }
 
               public String getName() { return name; }
@@ -213,8 +220,6 @@ jobs:
                   if (enabled) onEnable(); else onDisable();
               }
               public void toggle() { setEnabled(!enabled); }
-              public int getKey() { return key; }
-              public void setKey(int key) { this.key = key; }
               public void onEnable() {}
               public void onDisable() {}
               public void onTick() {}
@@ -403,32 +408,6 @@ jobs:
           }
           JAVA
 
-          cat > src/main/java/com/example/educlient/mixin/KeyboardMixin.java <<'JAVA'
-          package com.example.educlient.mixin;
-
-          import com.example.educlient.EduClient;
-          import com.example.educlient.gui.ClickGuiScreen;
-          import com.example.educlient.module.Module;
-          import net.minecraft.client.Keyboard;
-          import net.minecraft.client.MinecraftClient;
-          import org.spongepowered.asm.mixin.Mixin;
-          import org.spongepowered.asm.mixin.injection.At;
-          import org.spongepowered.asm.mixin.injection.Inject;
-          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-          @Mixin(Keyboard.class)
-          public class KeyboardMixin {
-              @Inject(method = "onKey", at = @At("HEAD"))
-              private void educlient$onKey(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
-                  if (action != 1) return;
-                  MinecraftClient client = MinecraftClient.getInstance();
-                  if (client.currentScreen instanceof ClickGuiScreen) return;
-                  if (EduClient.MODULE_MANAGER == null) return;
-                  for (Module m : EduClient.MODULE_MANAGER.modules) if (m.getKey() == key) m.toggle();
-              }
-          }
-          JAVA
-
           cat > src/main/java/com/example/educlient/gui/GuiHelper.java <<'JAVA'
           package com.example.educlient.gui;
 
@@ -480,7 +459,7 @@ jobs:
               private Module expandedModule = null;
               private final List<Module> visibleModules = new ArrayList<>();
               private SliderSetting draggingSlider = null;
-              private Module listeningKeybindModule = null;
+              private KeybindSetting listeningKeybind = null;
 
               public ClickGuiScreen() { super(Text.literal("ClickGUI")); }
 
@@ -582,7 +561,8 @@ jobs:
                   } else if (s instanceof KeybindSetting k) {
                       String n = k.isBound() ? GLFW.glfwGetKeyName(k.getValue(), 0) : "None";
                       if (n == null) n = "Key " + k.getValue();
-                      c.drawTextWithShadow(this.textRenderer, "[ " + n + " ]", x + 120, y + 4, 0xFFAAAAAA);
+                      String label = k == listeningKeybind ? "[ ... ]" : "[ " + n + " ]";
+                      c.drawTextWithShadow(this.textRenderer, label, x + 120, y + 4, 0xFFAAAAAA);
                   }
               }
 
@@ -625,12 +605,7 @@ jobs:
                       if (b == 0) { draggingSlider = sl; updateSlider(sl, mx); } else sl.reset();
                   } else if (s instanceof ToggleSetting t) t.toggle();
                   else if (s instanceof ModeSetting m) { if (b == 0) m.cycle(); else m.cycleReverse(); }
-                  else if (s instanceof KeybindSetting) listeningKeybindModule = findModule(s);
-              }
-
-              private Module findModule(Setting<?> s) {
-                  for (Module m : EduClient.MODULE_MANAGER.modules) if (m.settings.contains(s)) return m;
-                  return null;
+                  else if (s instanceof KeybindSetting k) listeningKeybind = k;
               }
 
               private void updateSlider(SliderSetting sl, double mx) {
@@ -662,10 +637,10 @@ jobs:
               @Override
               public boolean keyPressed(KeyInput input) {
                   int key = input.key();
-                  if (listeningKeybindModule != null) {
-                      if (key == GLFW.GLFW_KEY_ESCAPE || key == GLFW.GLFW_KEY_DELETE) listeningKeybindModule.setKey(-1);
-                      else listeningKeybindModule.setKey(key);
-                      listeningKeybindModule = null; return true;
+                  if (listeningKeybind != null) {
+                      if (key == GLFW.GLFW_KEY_ESCAPE || key == GLFW.GLFW_KEY_DELETE) listeningKeybind.unbind();
+                      else listeningKeybind.setKey(key);
+                      listeningKeybind = null; return true;
                   }
                   if (key == GLFW.GLFW_KEY_ESCAPE) { this.close(); return true; }
                   return super.keyPressed(input);
