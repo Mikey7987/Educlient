@@ -161,7 +161,7 @@ jobs:
                           "key.educlient.clickgui",
                           InputUtil.Type.KEYSYM,
                           GLFW.GLFW_KEY_RIGHT_SHIFT,
-                          "category.educlient"
+                          KeyBinding.Category.MISC
                   ));
 
                   ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -264,6 +264,7 @@ jobs:
               }
               public void reset() { this.value = defaultValue; }
               public float getPercentage() { return (float) ((value - min) / (max - min)); }
+              public long getLongValue() { return value.longValue(); }
           }
           JAVA
 
@@ -455,8 +456,10 @@ jobs:
           import com.example.educlient.module.Category;
           import com.example.educlient.module.Module;
           import com.example.educlient.setting.*;
+          import net.minecraft.client.gui.Click;
           import net.minecraft.client.gui.DrawContext;
           import net.minecraft.client.gui.screen.Screen;
+          import net.minecraft.client.input.KeyInput;
           import net.minecraft.text.Text;
           import org.lwjgl.glfw.GLFW;
 
@@ -490,15 +493,18 @@ jobs:
                   int sx = 20, sy = 40;
                   int px = sx + SIDEBAR_WIDTH + 10, py = 40;
                   float scale = 0.85f + 0.15f * openProgress;
-                  context.getMatrices().push();
-                  context.getMatrices().translate(this.width / 2f, this.height / 2f, 0);
-                  context.getMatrices().scale(scale, scale, 1f);
-                  context.getMatrices().translate(-this.width / 2f, -this.height / 2f, 0);
+
+                  context.getMatrices().pushMatrix();
+                  context.getMatrices().translate(this.width / 2f, this.height / 2f);
+                  context.getMatrices().scale(scale, scale);
+                  context.getMatrices().translate(-this.width / 2f, -this.height / 2f);
+
                   GuiHelper.fillRoundedRect(context, sx, sy, SIDEBAR_WIDTH, PANEL_HEIGHT, 6, 0xDD1A1A1A);
                   renderSidebar(context, sx, sy, mouseX, mouseY);
                   GuiHelper.fillRoundedRect(context, px, py, PANEL_WIDTH, PANEL_HEIGHT, 6, 0xDD141414);
                   renderModuleList(context, px, py, mouseX, mouseY);
-                  context.getMatrices().pop();
+
+                  context.getMatrices().popMatrix();
               }
 
               private void renderSidebar(DrawContext c, int x, int y, int mx, int my) {
@@ -581,7 +587,9 @@ jobs:
               }
 
               @Override
-              public boolean mouseClicked(double mx, double my, int b) {
+              public boolean mouseClicked(Click click, boolean doubled) {
+                  double mx = click.x(), my = click.y();
+                  int b = click.button();
                   int sx = 20, sy = 40;
                   int ty = sy + 10;
                   for (Category cat : Category.values()) {
@@ -591,7 +599,7 @@ jobs:
                       ty += 34;
                   }
                   int px = sx + SIDEBAR_WIDTH + 10, py = 40;
-                  if (mx < px || mx > px + PANEL_WIDTH || my < py || my > py + PANEL_HEIGHT) return super.mouseClicked(mx, my, b);
+                  if (mx < px || mx > px + PANEL_WIDTH || my < py || my > py + PANEL_HEIGHT) return super.mouseClicked(click, doubled);
                   int y = py + 10 - (int) scrollOffset;
                   for (Module m : visibleModules) {
                       if (GuiHelper.isHovered(mx, my, px + 10, y, PANEL_WIDTH - 20, CARD_HEIGHT)) {
@@ -609,7 +617,7 @@ jobs:
                           y += 6;
                       }
                   }
-                  return super.mouseClicked(mx, my, b);
+                  return super.mouseClicked(click, doubled);
               }
 
               private void handleSettingClick(Setting<?> s, double mx, int b) {
@@ -633,19 +641,34 @@ jobs:
                   sl.setValueSnapped(sl.min + p * (sl.max - sl.min));
               }
 
-              @Override public boolean mouseReleased(double mx, double my, int b) { if (draggingSlider != null && b == 0) { draggingSlider = null; return true; } return super.mouseReleased(mx, my, b); }
-              @Override public boolean mouseDragged(double mx, double my, int b, double dx, double dy) { if (draggingSlider != null) { updateSlider(draggingSlider, mx); return true; } return super.mouseDragged(mx, my, b, dx, dy); }
-              @Override public boolean mouseScrolled(double mx, double my, double h, double v) { targetScrollOffset -= (float) v * 20f; return true; }
+              @Override
+              public boolean mouseReleased(Click click) {
+                  if (draggingSlider != null && click.button() == 0) { draggingSlider = null; return true; }
+                  return super.mouseReleased(click);
+              }
 
               @Override
-              public boolean keyPressed(int key, int scan, int mod) {
+              public boolean mouseDragged(Click click, double dx, double dy) {
+                  if (draggingSlider != null) { updateSlider(draggingSlider, click.x()); return true; }
+                  return super.mouseDragged(click, dx, dy);
+              }
+
+              @Override
+              public boolean mouseScrolled(double mx, double my, double h, double v) {
+                  targetScrollOffset -= (float) v * 20f;
+                  return true;
+              }
+
+              @Override
+              public boolean keyPressed(KeyInput input) {
+                  int key = input.key();
                   if (listeningKeybindModule != null) {
                       if (key == GLFW.GLFW_KEY_ESCAPE || key == GLFW.GLFW_KEY_DELETE) listeningKeybindModule.setKey(-1);
                       else listeningKeybindModule.setKey(key);
                       listeningKeybindModule = null; return true;
                   }
                   if (key == GLFW.GLFW_KEY_ESCAPE) { this.close(); return true; }
-                  return super.keyPressed(key, scan, mod);
+                  return super.keyPressed(input);
               }
 
               private float lerp(float a, float b, float f) { return a + (b - a) * f; }
@@ -708,7 +731,7 @@ jobs:
                   LivingEntity newTarget = TargetUtil.findBestTarget(mc.player, range.getValue(), fov.getValue(), priority.getValue(), playersOnly.getValue());
                   if (newTarget != target) { target = newTarget; overshooting = false; reactionTimer.reset(); }
                   if (target == null || target.isDead()) return;
-                  if (!reactionTimer.hasElapsed((long) reactionTime.getValue())) return;
+                  if (!reactionTimer.hasElapsed(reactionTime.getLongValue())) return;
                   performRotation(target);
               }
 
@@ -721,8 +744,8 @@ jobs:
                   float deltaYaw = MathUtil.wrapDegrees(desired[0] - currentYaw);
                   float deltaPitch = desired[1] - currentPitch;
 
-                  deltaYaw *= speed1.getValue();
-                  deltaPitch *= speed2.getValue();
+                  deltaYaw *= speed1.getValue().floatValue();
+                  deltaPitch *= speed2.getValue().floatValue();
 
                   float distance = (float) Math.sqrt(deltaYaw * deltaYaw + deltaPitch * deltaPitch);
                   if (distance < 0.05f) { overshooting = false; return; }
@@ -913,9 +936,9 @@ jobs:
                   if (mc.player == null || mc.world == null) return;
                   switch (state) {
                       case IDLE: tryStart(); break;
-                      case WAITING_REACTION: if (timer.hasElapsed((long) reactionDelay.getValue())) swapToAxe(); break;
-                      case WAITING_SWAP: if (timer.hasElapsed((long) swapToHitDelay.getValue())) performHit(); break;
-                      case WAITING_SWAP_BACK: if (timer.hasElapsed((long) swapBackDelay.getValue())) swapBackAndReset(); break;
+                      case WAITING_REACTION: if (timer.hasElapsed(reactionDelay.getLongValue())) swapToAxe(); break;
+                      case WAITING_SWAP: if (timer.hasElapsed(swapToHitDelay.getLongValue())) performHit(); break;
+                      case WAITING_SWAP_BACK: if (timer.hasElapsed(swapBackDelay.getLongValue())) swapBackAndReset(); break;
                   }
               }
 
