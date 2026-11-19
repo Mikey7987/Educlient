@@ -126,6 +126,7 @@ jobs:
           import com.example.educlient.setting.Setting;
           import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
           import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+          import net.minecraft.client.MinecraftClient;
           import net.minecraft.client.option.KeyBinding;
           import net.minecraft.client.util.InputUtil;
           import org.lwjgl.glfw.GLFW;
@@ -157,22 +158,20 @@ jobs:
                       while (clickGuiKey.wasPressed()) {
                           client.setScreen(new com.example.educlient.gui.ClickGuiScreen());
                       }
-
-                      long handle = client.getWindow().getHandle();
                       for (Module module : modules) {
                           if (module.isEnabled()) module.onTick();
-                          pollKeybind(module, handle);
+                          pollKeybind(module, client);
                       }
                   });
               }
 
-              private void pollKeybind(Module module, long windowHandle) {
+              private void pollKeybind(Module module, MinecraftClient client) {
                   int key = -1;
                   for (Setting<?> s : module.settings) {
                       if (s instanceof KeybindSetting ks) { key = ks.getValue(); break; }
                   }
                   if (key == -1) { module.wasPressed = false; return; }
-                  boolean pressed = InputUtil.isKeyPressed(windowHandle, key);
+                  boolean pressed = InputUtil.isKeyPressed(client.getWindow(), key);
                   if (pressed && !module.wasPressed) module.toggle();
                   module.wasPressed = pressed;
               }
