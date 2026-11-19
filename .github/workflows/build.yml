@@ -38,7 +38,7 @@ jobs:
           yarn_mappings=1.21.11+build.1
           loader_version=0.18.2
           fabric_version=0.141.3+1.21.11
-          loom_version=1.10.5
+          loom_version=1.13.3
           GRADLEPROPS
 
           cat > settings.gradle <<'SETTINGSGRADLE'
@@ -81,7 +81,7 @@ jobs:
             "id": "educlient",
             "version": "${version}",
             "name": "Educational Client",
-            "description": "Modular client for showcase combat modules.",
+            "description": "Modular client.",
             "authors": ["Example"],
             "license": "MIT",
             "environment": "client",
@@ -233,6 +233,218 @@ jobs:
               COMBAT("Combat"), RENDER("Render"), PLAYER("Player"), MOVEMENT("Movement");
               public final String displayName;
               Category(String displayName) { this.displayName = displayName; }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/setting/Setting.java <<'JAVA'
+          package com.example.educlient.setting;
+
+          public abstract class Setting<T> {
+              private final String name;
+              protected T value;
+              public Setting(String name, T defaultValue) { this.name = name; this.value = defaultValue; }
+              public String getName() { return name; }
+              public T getValue() { return value; }
+              public void setValue(T value) { this.value = value; }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/setting/SliderSetting.java <<'JAVA'
+          package com.example.educlient.setting;
+
+          public class SliderSetting extends Setting<Double> {
+              public final double min, max, step;
+              private final double defaultValue;
+              public SliderSetting(String name, double d, double min, double max, double step) {
+                  super(name, d); this.defaultValue = d; this.min = min; this.max = max; this.step = step;
+              }
+              public void setValueSnapped(double raw) {
+                  double s = Math.round(raw / step) * step;
+                  this.value = Math.max(min, Math.min(max, s));
+              }
+              public void reset() { this.value = defaultValue; }
+              public float getPercentage() { return (float) ((value - min) / (max - min)); }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/setting/ToggleSetting.java <<'JAVA'
+          package com.example.educlient.setting;
+
+          public class ToggleSetting extends Setting<Boolean> {
+              public ToggleSetting(String name, boolean d) { super(name, d); }
+              public void toggle() { value = !value; }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/setting/ModeSetting.java <<'JAVA'
+          package com.example.educlient.setting;
+
+          import java.util.List;
+
+          public class ModeSetting extends Setting<String> {
+              private final List<String> modes;
+              public ModeSetting(String name, String d, List<String> modes) { super(name, d); this.modes = modes; }
+              public List<String> getModes() { return modes; }
+              public void cycle() { int i = modes.indexOf(value); value = modes.get((i + 1) % modes.size()); }
+              public void cycleReverse() { int i = modes.indexOf(value); value = modes.get((i - 1 + modes.size()) % modes.size()); }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/setting/KeybindSetting.java <<'JAVA'
+          package com.example.educlient.setting;
+
+          public class KeybindSetting extends Setting<Integer> {
+              public KeybindSetting(String name, int d) { super(name, d); }
+              public void setKey(int k) { this.value = k; }
+              public boolean isBound() { return value != -1; }
+              public void unbind() { this.value = -1; }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/util/MathUtil.java <<'JAVA'
+          package com.example.educlient.util;
+
+          public final class MathUtil {
+              private MathUtil() {}
+              public static float wrapDegrees(float d) {
+                  float x = d % 360f;
+                  if (x >= 180f) x -= 360f;
+                  if (x < -180f) x += 360f;
+                  return x;
+              }
+              public static float clamp(float v, float min, float max) { return Math.max(min, Math.min(max, v)); }
+              public static double clamp(double v, double min, double max) { return Math.max(min, Math.min(max, v)); }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/util/RotationUtil.java <<'JAVA'
+          package com.example.educlient.util;
+
+          import net.minecraft.util.math.Vec3d;
+
+          public final class RotationUtil {
+              private RotationUtil() {}
+              public static float[] calculateAngles(Vec3d from, Vec3d to) {
+                  double dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+                  double dist = Math.sqrt(dx * dx + dz * dz);
+                  float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+                  float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
+                  return new float[]{yaw, pitch};
+              }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/util/TimerUtil.java <<'JAVA'
+          package com.example.educlient.util;
+
+          public class TimerUtil {
+              private long lastReset = System.currentTimeMillis();
+              public void reset() { lastReset = System.currentTimeMillis(); }
+              public boolean hasElapsed(long ms) { return System.currentTimeMillis() - lastReset >= ms; }
+              public long getElapsed() { return System.currentTimeMillis() - lastReset; }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/util/TargetUtil.java <<'JAVA'
+          package com.example.educlient.util;
+
+          import net.minecraft.client.MinecraftClient;
+          import net.minecraft.entity.LivingEntity;
+          import net.minecraft.entity.player.PlayerEntity;
+          import net.minecraft.item.AxeItem;
+          import net.minecraft.item.SwordItem;
+          import net.minecraft.util.math.Box;
+          import net.minecraft.util.math.Vec3d;
+
+          import java.util.Comparator;
+          import java.util.List;
+          import java.util.stream.Collectors;
+
+          public final class TargetUtil {
+              private TargetUtil() {}
+              public static LivingEntity findBestTarget(PlayerEntity player, double range, double fov, String priority, boolean playersOnly) {
+                  List<LivingEntity> cands = player.getWorld().getEntitiesByClass(
+                          LivingEntity.class,
+                          new Box(player.getBlockPos()).expand(range),
+                          e -> isValidTarget(e, playersOnly)
+                  );
+                  if (cands.isEmpty()) return null;
+                  Vec3d eye = player.getEyePos();
+                  float py = player.getYaw(), pp = player.getPitch();
+                  cands = cands.stream().filter(e -> {
+                      float[] a = RotationUtil.calculateAngles(eye, getAimPoint(e));
+                      float dy = Math.abs(MathUtil.wrapDegrees(a[0] - py));
+                      float dp = Math.abs(a[1] - pp);
+                      return Math.sqrt(dy * dy + dp * dp) <= fov / 2.0;
+                  }).collect(Collectors.toList());
+                  if (cands.isEmpty()) return null;
+                  Comparator<LivingEntity> cmp = Comparator.comparingDouble(e -> e.squaredDistanceTo(player));
+                  if ("Health".equals(priority)) cmp = Comparator.comparingDouble(LivingEntity::getHealth);
+                  return cands.stream().min(cmp).orElse(null);
+              }
+
+              public static boolean isValidTarget(LivingEntity e, boolean playersOnly) {
+                  if (e == null || !e.isAlive()) return false;
+                  if (e == MinecraftClient.getInstance().player) return false;
+                  if (playersOnly && !(e instanceof PlayerEntity)) return false;
+                  return true;
+              }
+
+              public static Vec3d getAimPoint(LivingEntity t) {
+                  Box b = t.getBoundingBox();
+                  return new Vec3d((b.minX + b.maxX) / 2.0, b.minY + (b.maxY - b.minY) * 0.6, (b.minZ + b.maxZ) / 2.0);
+              }
+
+              public static boolean isHoldingWeapon(PlayerEntity p) {
+                  var s = p.getMainHandStack();
+                  return s.getItem() instanceof SwordItem || s.getItem() instanceof AxeItem;
+              }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/mixin/KeyboardMixin.java <<'JAVA'
+          package com.example.educlient.mixin;
+
+          import com.example.educlient.EduClient;
+          import com.example.educlient.gui.ClickGuiScreen;
+          import com.example.educlient.module.Module;
+          import net.minecraft.client.Keyboard;
+          import net.minecraft.client.MinecraftClient;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+          @Mixin(Keyboard.class)
+          public class KeyboardMixin {
+              @Inject(method = "onKey", at = @At("HEAD"))
+              private void educlient$onKey(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
+                  if (action != 1) return;
+                  MinecraftClient client = MinecraftClient.getInstance();
+                  if (client.currentScreen instanceof ClickGuiScreen) return;
+                  if (EduClient.MODULE_MANAGER == null) return;
+                  for (Module m : EduClient.MODULE_MANAGER.modules) if (m.getKey() == key) m.toggle();
+              }
+          }
+          JAVA
+
+          cat > src/main/java/com/example/educlient/gui/GuiHelper.java <<'JAVA'
+          package com.example.educlient.gui;
+
+          import net.minecraft.client.gui.DrawContext;
+
+          public final class GuiHelper {
+              private GuiHelper() {}
+              public static void fillRoundedRect(DrawContext c, int x, int y, int w, int h, int r, int col) {
+                  c.fill(x + r, y, x + w - r, y + h, col);
+                  c.fill(x, y + r, x + r, y + h - r, col);
+                  c.fill(x + w - r, y + r, x + w, y + h - r, col);
+                  c.fill(x + r, y, x + w - r, y + r, col);
+                  c.fill(x + r, y + h - r, x + w - r, y + h, col);
+              }
+              public static boolean isHovered(double mx, double my, int x, int y, int w, int h) {
+                  return mx >= x && mx <= x + w && my >= y && my <= y + h;
+              }
           }
           JAVA
 
@@ -584,437 +796,14 @@ jobs:
           }
           JAVA
 
-          cat > src/main/java/com/example/educlient/setting/Setting.java <<'JAVA'
-          package com.example.educlient.setting;
-
-          public abstract class Setting<T> {
-              private final String name;
-              protected T value;
-              public Setting(String name, T defaultValue) { this.name = name; this.value = defaultValue; }
-              public String getName() { return name; }
-              public T getValue() { return value; }
-              public void setValue(T value) { this.value = value; }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/setting/SliderSetting.java <<'JAVA'
-          package com.example.educlient.setting;
-
-          public class SliderSetting extends Setting<Double> {
-              public final double min, max, step;
-              private final double defaultValue;
-              public SliderSetting(String name, double d, double min, double max, double step) {
-                  super(name, d); this.defaultValue = d; this.min = min; this.max = max; this.step = step;
-              }
-              public void setValueSnapped(double raw) {
-                  double s = Math.round(raw / step) * step;
-                  this.value = Math.max(min, Math.min(max, s));
-              }
-              public void reset() { this.value = defaultValue; }
-              public float getPercentage() { return (float) ((value - min) / (max - min)); }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/setting/ToggleSetting.java <<'JAVA'
-          package com.example.educlient.setting;
-
-          public class ToggleSetting extends Setting<Boolean> {
-              public ToggleSetting(String name, boolean d) { super(name, d); }
-              public void toggle() { value = !value; }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/setting/ModeSetting.java <<'JAVA'
-          package com.example.educlient.setting;
-
-          import java.util.List;
-
-          public class ModeSetting extends Setting<String> {
-              private final List<String> modes;
-              public ModeSetting(String name, String d, List<String> modes) { super(name, d); this.modes = modes; }
-              public List<String> getModes() { return modes; }
-              public void cycle() { int i = modes.indexOf(value); value = modes.get((i + 1) % modes.size()); }
-              public void cycleReverse() { int i = modes.indexOf(value); value = modes.get((i - 1 + modes.size()) % modes.size()); }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/setting/KeybindSetting.java <<'JAVA'
-          package com.example.educlient.setting;
-
-          public class KeybindSetting extends Setting<Integer> {
-              public KeybindSetting(String name, int d) { super(name, d); }
-              public void setKey(int k) { this.value = k; }
-              public boolean isBound() { return value != -1; }
-              public void unbind() { this.value = -1; }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/gui/GuiHelper.java <<'JAVA'
-          package com.example.educlient.gui;
-
-          import net.minecraft.client.gui.DrawContext;
-
-          public final class GuiHelper {
-              private GuiHelper() {}
-              public static void fillRoundedRect(DrawContext c, int x, int y, int w, int h, int r, int col) {
-                  c.fill(x + r, y, x + w - r, y + h, col);
-                  c.fill(x, y + r, x + r, y + h - r, col);
-                  c.fill(x + w - r, y + r, x + w, y + h - r, col);
-                  c.fill(x + r, y, x + w - r, y + r, col);
-                  c.fill(x + r, y + h - r, x + w - r, y + h, col);
-              }
-              public static void fillRoundedRectGradient(DrawContext c, int x, int y, int w, int h, int r, int top, int bot) {
-                  c.fillGradient(x + r, y, x + w - r, y + h, top, bot);
-                  c.fillGradient(x, y + r, x + r, y + h - r, top, bot);
-                  c.fillGradient(x + w - r, y + r, x + w, y + h - r, top, bot);
-              }
-              public static boolean isHovered(double mx, double my, int x, int y, int w, int h) {
-                  return mx >= x && mx <= x + w && my >= y && my <= y + h;
-              }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/util/MathUtil.java <<'JAVA'
-          package com.example.educlient.util;
-
-          public final class MathUtil {
-              private MathUtil() {}
-              public static float wrapDegrees(float d) {
-                  float x = d % 360f;
-                  if (x >= 180f) x -= 360f;
-                  if (x < -180f) x += 360f;
-                  return x;
-              }
-              public static float clamp(float v, float min, float max) { return Math.max(min, Math.min(max, v)); }
-              public static double clamp(double v, double min, double max) { return Math.max(min, Math.min(max, v)); }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/util/RotationUtil.java <<'JAVA'
-          package com.example.educlient.util;
-
-          import net.minecraft.util.math.Vec3d;
-
-          public final class RotationUtil {
-              private RotationUtil() {}
-              public static float[] calculateAngles(Vec3d from, Vec3d to) {
-                  double dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
-                  double dist = Math.sqrt(dx * dx + dz * dz);
-                  float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-                  float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
-                  return new float[]{yaw, pitch};
-              }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/util/TimerUtil.java <<'JAVA'
-          package com.example.educlient.util;
-
-          public class TimerUtil {
-              private long lastReset = System.currentTimeMillis();
-              public void reset() { lastReset = System.currentTimeMillis(); }
-              public boolean hasElapsed(long ms) { return System.currentTimeMillis() - lastReset >= ms; }
-              public long getElapsed() { return System.currentTimeMillis() - lastReset; }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/util/TargetUtil.java <<'JAVA'
-          package com.example.educlient.util;
-
-          import net.minecraft.client.MinecraftClient;
-          import net.minecraft.entity.LivingEntity;
-          import net.minecraft.entity.player.PlayerEntity;
-          import net.minecraft.item.AxeItem;
-          import net.minecraft.item.SwordItem;
-          import net.minecraft.util.math.Box;
-          import net.minecraft.util.math.Vec3d;
-
-          import java.util.Comparator;
-          import java.util.List;
-          import java.util.stream.Collectors;
-
-          public final class TargetUtil {
-              private TargetUtil() {}
-              public static LivingEntity findBestTarget(PlayerEntity player, double range, double fov, String priority, boolean playersOnly) {
-                  List<LivingEntity> cands = player.getWorld().getEntitiesByClass(
-                          LivingEntity.class,
-                          new Box(player.getBlockPos()).expand(range),
-                          e -> isValidTarget(e, playersOnly)
-                  );
-                  if (cands.isEmpty()) return null;
-                  Vec3d eye = player.getEyePos();
-                  float py = player.getYaw(), pp = player.getPitch();
-                  cands = cands.stream().filter(e -> {
-                      float[] a = RotationUtil.calculateAngles(eye, getAimPoint(e));
-                      float dy = Math.abs(MathUtil.wrapDegrees(a[0] - py));
-                      float dp = Math.abs(a[1] - pp);
-                      return Math.sqrt(dy * dy + dp * dp) <= fov / 2.0;
-                  }).collect(Collectors.toList());
-                  if (cands.isEmpty()) return null;
-                  Comparator<LivingEntity> cmp = Comparator.comparingDouble(e -> e.squaredDistanceTo(player));
-                  if ("Health".equals(priority)) cmp = Comparator.comparingDouble(LivingEntity::getHealth);
-                  return cands.stream().min(cmp).orElse(null);
-              }
-
-              public static boolean isValidTarget(LivingEntity e, boolean playersOnly) {
-                  if (e == null || !e.isAlive()) return false;
-                  if (e == MinecraftClient.getInstance().player) return false;
-                  if (playersOnly && !(e instanceof PlayerEntity)) return false;
-                  return true;
-              }
-
-              public static Vec3d getAimPoint(LivingEntity t) {
-                  Box b = t.getBoundingBox();
-                  return new Vec3d((b.minX + b.maxX) / 2.0, b.minY + (b.maxY - b.minY) * 0.6, (b.minZ + b.maxZ) / 2.0);
-              }
-
-              public static boolean isHoldingWeapon(PlayerEntity p) {
-                  var s = p.getMainHandStack();
-                  return s.getItem() instanceof SwordItem || s.getItem() instanceof AxeItem;
-              }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/gui/ClickGuiScreen.java <<'JAVA'
-          package com.example.educlient.gui;
-
-          import com.example.educlient.EduClient;
-          import com.example.educlient.module.Category;
-          import com.example.educlient.module.Module;
-          import com.example.educlient.setting.*;
-          import net.minecraft.client.gui.DrawContext;
-          import net.minecraft.client.gui.screen.Screen;
-          import net.minecraft.text.Text;
-          import org.lwjgl.glfw.GLFW;
-
-          import java.util.ArrayList;
-          import java.util.List;
-
-          public class ClickGuiScreen extends Screen {
-              private static final int SIDEBAR_WIDTH = 100;
-              private static final int PANEL_WIDTH = 320;
-              private static final int PANEL_HEIGHT = 300;
-              private static final int CARD_HEIGHT = 26;
-              private static final int SETTING_HEIGHT = 22;
-
-              private Category selectedCategory = Category.COMBAT;
-              private float openProgress = 0f;
-              private float scrollOffset = 0f;
-              private float targetScrollOffset = 0f;
-
-              private Module expandedModule = null;
-              private final List<Module> visibleModules = new ArrayList<>();
-              private SliderSetting draggingSlider = null;
-              private Module listeningKeybindModule = null;
-
-              public ClickGuiScreen() { super(Text.literal("ClickGUI")); }
-
-              @Override
-              public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-                  openProgress = lerp(openProgress, 1f, 0.15f);
-                  int oa = (int) (180 * openProgress);
-                  context.fill(0, 0, this.width, this.height, oa << 24);
-                  if (openProgress < 0.01f) return;
-
-                  int sx = 20, sy = 40;
-                  int px = sx + SIDEBAR_WIDTH + 10, py = 40;
-
-                  float scale = 0.85f + 0.15f * openProgress;
-                  context.getMatrices().push();
-                  context.getMatrices().translate(this.width / 2f, this.height / 2f, 0);
-                  context.getMatrices().scale(scale, scale, 1f);
-                  context.getMatrices().translate(-this.width / 2f, -this.height / 2f, 0);
-
-                  GuiHelper.fillRoundedRect(context, sx, sy, SIDEBAR_WIDTH, PANEL_HEIGHT, 6, 0xDD1A1A1A);
-                  renderSidebar(context, sx, sy, mouseX, mouseY);
-                  GuiHelper.fillRoundedRect(context, px, py, PANEL_WIDTH, PANEL_HEIGHT, 6, 0xDD141414);
-                  renderModuleList(context, px, py, mouseX, mouseY);
-
-                  context.getMatrices().pop();
-              }
-
-              private void renderSidebar(DrawContext c, int x, int y, int mx, int my) {
-                  int ty = y + 10;
-                  for (Category cat : Category.values()) {
-                      boolean sel = cat == selectedCategory;
-                      boolean hov = GuiHelper.isHovered(mx, my, x + 5, ty, SIDEBAR_WIDTH - 10, 30);
-                      int bg = sel ? 0xDD2A2A2A : (hov ? 0xAA222222 : 0);
-                      if (bg != 0) GuiHelper.fillRoundedRect(c, x + 5, ty, SIDEBAR_WIDTH - 10, 30, 4, bg);
-                      int tc = sel ? 0xFFFFFFFF : 0xFFAAAAAA;
-                      c.drawTextWithShadow(this.textRenderer, cat.displayName, x + 14, ty + 11, tc);
-                      ty += 34;
-                  }
-              }
-
-              private void renderModuleList(DrawContext c, int px, int py, int mx, int my) {
-                  scrollOffset = lerp(scrollOffset, targetScrollOffset, 0.2f);
-                  visibleModules.clear();
-                  for (Module m : EduClient.MODULE_MANAGER.modules) if (m.getCategory() == selectedCategory) visibleModules.add(m);
-
-                  int cy = py + 10 - (int) scrollOffset;
-                  int ch = 0;
-                  for (Module m : visibleModules) {
-                      ch += CARD_HEIGHT + 4;
-                      if (m == expandedModule) ch += m.settings.size() * SETTING_HEIGHT + 6;
-                  }
-                  c.enableScissor(px + 5, py + 5, px + PANEL_WIDTH - 5, py + PANEL_HEIGHT - 5);
-                  int y = cy;
-                  for (Module m : visibleModules) {
-                      renderCard(c, m, px + 10, y, PANEL_WIDTH - 20, mx, my);
-                      y += CARD_HEIGHT + 4;
-                      if (m == expandedModule) {
-                          for (Setting<?> s : m.settings) { renderSetting(c, s, px + 20, y, PANEL_WIDTH - 40, mx, my); y += SETTING_HEIGHT; }
-                          y += 6;
-                      }
-                  }
-                  c.disableScissor();
-                  int max = Math.max(0, ch - (PANEL_HEIGHT - 20));
-                  if (targetScrollOffset < 0) targetScrollOffset = 0;
-                  if (targetScrollOffset > max) targetScrollOffset = max;
-              }
-
-              private void renderCard(DrawContext c, Module m, int x, int y, int w, int mx, int my) {
-                  boolean hov = GuiHelper.isHovered(mx, my, x, y, w, CARD_HEIGHT);
-                  boolean exp = m == expandedModule;
-                  int bg = hov ? 0xFF252525 : 0xFF1E1E1E;
-                  GuiHelper.fillRoundedRect(c, x, y, w, CARD_HEIGHT, 4, bg);
-                  int tc = m.isEnabled() ? 0xFFFFFFFF : 0xFF888888;
-                  c.drawTextWithShadow(this.textRenderer, m.getName(), x + 8, y + 9, tc);
-                  int swx = x + w - 36, swy = y + 7, sww = 28, swh = 12;
-                  int bg2 = m.isEnabled() ? 0xFF4CAF50 : 0xFF555555;
-                  GuiHelper.fillRoundedRect(c, swx, swy, sww, swh, swh / 2, bg2);
-                  int kx = m.isEnabled() ? swx + sww - swh + 1 : swx + 1;
-                  GuiHelper.fillRoundedRect(c, kx, swy + 1, swh - 2, swh - 2, (swh - 2) / 2, 0xFFFFFFFF);
-                  c.drawTextWithShadow(this.textRenderer, exp ? "-" : "+", x + w - 52, y + 9, 0xFFAAAAAA);
-              }
-
-              private void renderSetting(DrawContext c, Setting<?> s, int x, int y, int w, int mx, int my) {
-                  c.drawTextWithShadow(this.textRenderer, s.getName(), x, y + 4, 0xFFCCCCCC);
-                  if (s instanceof SliderSetting sl) {
-                      int sx = x + 120, sw = w - 130, sy = y + 7, sh = 6;
-                      GuiHelper.fillRoundedRect(c, sx, sy, sw, sh, 3, 0xFF333333);
-                      int fw = (int) (sw * sl.getPercentage());
-                      GuiHelper.fillRoundedRect(c, sx, sy, fw, sh, 3, 0xFF4CAF50);
-                      c.drawTextWithShadow(this.textRenderer, String.format("%.2f", sl.getValue()), sx + sw + 6, y + 4, 0xFFAAAAAA);
-                  } else if (s instanceof ToggleSetting t) {
-                      int sx = x + w - 30, sy = y + 4, sw = 24, sh = 10;
-                      int bg = t.getValue() ? 0xFF4CAF50 : 0xFF555555;
-                      GuiHelper.fillRoundedRect(c, sx, sy, sw, sh, sh / 2, bg);
-                      int kx = t.getValue() ? sx + sw - sh : sx;
-                      GuiHelper.fillRoundedRect(c, kx, sy + 1, sh - 2, sh - 2, (sh - 2) / 2, 0xFFFFFFFF);
-                  } else if (s instanceof ModeSetting m) {
-                      int px = x + 120;
-                      GuiHelper.fillRoundedRect(c, px, y + 3, 100, 14, 4, 0xFF333333);
-                      c.drawTextWithShadow(this.textRenderer, m.getValue(), px + 6, y + 6, 0xFFFFFFFF);
-                  } else if (s instanceof KeybindSetting k) {
-                      String n = k.isBound() ? GLFW.glfwGetKeyName(k.getValue(), 0) : "None";
-                      if (n == null) n = "Key " + k.getValue();
-                      c.drawTextWithShadow(this.textRenderer, "[ " + n + " ]", x + 120, y + 4, 0xFFAAAAAA);
-                  }
-              }
-
-              @Override
-              public boolean mouseClicked(double mx, double my, int b) {
-                  int sx = 20, sy = 40;
-                  int ty = sy + 10;
-                  for (Category cat : Category.values()) {
-                      if (GuiHelper.isHovered(mx, my, sx + 5, ty, SIDEBAR_WIDTH - 10, 30)) {
-                          selectedCategory = cat; expandedModule = null; targetScrollOffset = 0; return true;
-                      }
-                      ty += 34;
-                  }
-                  int px = sx + SIDEBAR_WIDTH + 10, py = 40;
-                  if (mx < px || mx > px + PANEL_WIDTH || my < py || my > py + PANEL_HEIGHT) return super.mouseClicked(mx, my, b);
-                  int y = py + 10 - (int) scrollOffset;
-                  for (Module m : visibleModules) {
-                      if (GuiHelper.isHovered(mx, my, px + 10, y, PANEL_WIDTH - 20, CARD_HEIGHT)) {
-                          if (b == 0) m.toggle(); else if (b == 1) expandedModule = (expandedModule == m) ? null : m;
-                          return true;
-                      }
-                      y += CARD_HEIGHT + 4;
-                      if (m == expandedModule) {
-                          for (Setting<?> s : m.settings) {
-                              if (GuiHelper.isHovered(mx, my, px + 20, y, PANEL_WIDTH - 40, SETTING_HEIGHT)) {
-                                  handleSettingClick(s, mx, b); return true;
-                              }
-                              y += SETTING_HEIGHT;
-                          }
-                          y += 6;
-                      }
-                  }
-                  return super.mouseClicked(mx, my, b);
-              }
-
-              private void handleSettingClick(Setting<?> s, double mx, int b) {
-                  if (s instanceof SliderSetting sl) {
-                      if (b == 0) { draggingSlider = sl; updateSlider(sl, mx); } else sl.reset();
-                  } else if (s instanceof ToggleSetting t) t.toggle();
-                  else if (s instanceof ModeSetting m) { if (b == 0) m.cycle(); else m.cycleReverse(); }
-                  else if (s instanceof KeybindSetting) listeningKeybindModule = findModule(s);
-              }
-
-              private Module findModule(Setting<?> s) {
-                  for (Module m : EduClient.MODULE_MANAGER.modules) if (m.settings.contains(s)) return m;
-                  return null;
-              }
-
-              private void updateSlider(SliderSetting sl, double mx) {
-                  int px = 20 + SIDEBAR_WIDTH + 10;
-                  int sx = px + 20 + 120;
-                  int sw = (PANEL_WIDTH - 40) - 130;
-                  double p = Math.max(0, Math.min(1, (mx - sx) / (double) sw));
-                  sl.setValueSnapped(sl.min + p * (sl.max - sl.min));
-              }
-
-              @Override public boolean mouseReleased(double mx, double my, int b) { if (draggingSlider != null && b == 0) { draggingSlider = null; return true; } return super.mouseReleased(mx, my, b); }
-              @Override public boolean mouseDragged(double mx, double my, int b, double dx, double dy) { if (draggingSlider != null) { updateSlider(draggingSlider, mx); return true; } return super.mouseDragged(mx, my, b, dx, dy); }
-              @Override public boolean mouseScrolled(double mx, double my, double h, double v) { targetScrollOffset -= (float) v * 20f; return true; }
-
-              @Override
-              public boolean keyPressed(int key, int scan, int mod) {
-                  if (listeningKeybindModule != null) {
-                      if (key == GLFW.GLFW_KEY_ESCAPE || key == GLFW.GLFW_KEY_DELETE) listeningKeybindModule.setKey(-1);
-                      else listeningKeybindModule.setKey(key);
-                      listeningKeybindModule = null; return true;
-                  }
-                  if (key == GLFW.GLFW_KEY_ESCAPE) { this.close(); return true; }
-                  return super.keyPressed(key, scan, mod);
-              }
-
-              private float lerp(float a, float b, float f) { return a + (b - a) * f; }
-              @Override public boolean shouldPause() { return false; }
-          }
-          JAVA
-
-          cat > src/main/java/com/example/educlient/mixin/KeyboardMixin.java <<'JAVA'
-          package com.example.educlient.mixin;
-
-          import com.example.educlient.EduClient;
-          import com.example.educlient.gui.ClickGuiScreen;
-          import com.example.educlient.module.Module;
-          import net.minecraft.client.Keyboard;
-          import net.minecraft.client.MinecraftClient;
-          import org.spongepowered.asm.mixin.Mixin;
-          import org.spongepowered.asm.mixin.injection.At;
-          import org.spongepowered.asm.mixin.injection.Inject;
-          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-          @Mixin(Keyboard.class)
-          public class KeyboardMixin {
-              @Inject(method = "onKey", at = @At("HEAD"))
-              private void educlient$onKey(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
-                  if (action != 1) return;
-                  MinecraftClient client = MinecraftClient.getInstance();
-                  if (client.currentScreen instanceof ClickGuiScreen) return;
-                  if (EduClient.MODULE_MANAGER == null) return;
-                  for (Module m : EduClient.MODULE_MANAGER.modules) if (m.getKey() == key) m.toggle();
-              }
-          }
-          JAVA
+      - name: Set up Gradle 8.14
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
 
       - name: Build with Gradle
         run: |
-          if [ ! -f gradlew ]; then gradle wrapper --gradle-version 8.10; fi
+          gradle wrapper --gradle-version 8.14
           chmod +x gradlew
           ./gradlew build --no-daemon
 
